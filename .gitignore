@@ -1,1 +1,6 @@
 *.html
+*.csv
+*.json
+/bin
+/lib
+pyvenv.cfg

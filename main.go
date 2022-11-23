@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,17 +15,25 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
+var postcodeRegex = regexp.MustCompile("([A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}|GIR ?0A{2})")
+
 type salePrice struct {
-	amount uint
-	date   time.Time
-	tenure string
+	Amount uint
+	Date   time.Time
+	Tenure string
+}
+
+type postcode struct {
+	FirstPart  string
+	SecondPart string
 }
 
 type house struct {
-	address     string
-	numBedrooms uint
-	houseType   string
-	sales       []salePrice
+	Address     string
+	Postcode    postcode
+	NumBedrooms uint
+	HouseType   string
+	Sales       []salePrice
 }
 
 func main() {
@@ -35,8 +46,157 @@ func main() {
 	res = append(res, ReadDownloadedRightMoveHtml("rm-pg7.html")...)
 	res = append(res, ReadDownloadedRightMoveHtml("rm-pg8.html")...)
 	res = append(res, ReadDownloadedRightMoveHtml("rm-pg9.html")...)
-	fmt.Println("There are " + strconv.FormatInt(int64(len(res)), 10) + " results")
-	fmt.Println(res)
+	writeJsonFile(res, "house-data.json")
+	writeCSVFile(res)
+	writeEncodedCSVFile(res)
+}
+
+func writeJsonFile(houses any, filename string) {
+	bb, err := json.MarshalIndent(houses, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+
+	err = os.WriteFile(filename, bb, 0644)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func writeCSVFile(houses []house) {
+	records := [][]string{}
+
+	records = append(records, []string{
+		"postcode_first_part",
+		"num_bedrooms",
+		"house_type",
+		"num_sale_records",
+		"sale_amount",
+		"sale_year",
+		"sale_tenure",
+	})
+
+	for _, h := range houses {
+		for _, s := range h.Sales {
+			records = append(records, []string{
+				h.Postcode.FirstPart,
+				strconv.FormatInt(int64(h.NumBedrooms), 10),
+				h.HouseType,
+				strconv.FormatInt(int64(len(h.Sales)), 10),
+				strconv.FormatInt(int64(s.Amount), 10),
+				strconv.FormatInt(int64(s.Date.Year()), 10),
+				s.Tenure,
+			})
+		}
+	}
+
+	f, err := os.Create("house-data.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+
+	for _, record := range records {
+		if err := w.Write(record); err != nil {
+			log.Fatalln("error writing record to csv:", err)
+		}
+	}
+
+	// Write any buffered data to the underlying writer (standard output).
+	w.Flush()
+
+	if err := w.Error(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func writeEncodedCSVFile(houses []house) {
+	var encodedPostcodeCount int
+	encodedPostcode := make(map[string]int, 0)
+	decodePostcode := make(map[int]string, 0)
+	var encodedHouseTypeCount int
+	encodedHouseType := make(map[string]int, 0)
+	decodeHouseType := make(map[int]string, 0)
+	var encodedTenureCount int
+	encodedTenure := make(map[string]int, 0)
+	decodeTenure := make(map[int]string, 0)
+
+	records := [][]string{}
+
+	records = append(records, []string{
+		"postcode_first_part",
+		"num_bedrooms",
+		"house_type",
+		"num_sale_records",
+		"sale_amount",
+		"sale_year",
+		"sale_tenure",
+	})
+
+	for _, h := range houses {
+		for _, s := range h.Sales {
+			_, ok := encodedPostcode[h.Postcode.FirstPart]
+			if !ok {
+				encodedPostcode[h.Postcode.FirstPart] = encodedPostcodeCount
+				decodePostcode[encodedPostcodeCount] = h.Postcode.FirstPart
+				encodedPostcodeCount++
+			}
+
+			_, ok = encodedHouseType[h.HouseType]
+			if !ok {
+				encodedHouseType[h.HouseType] = encodedHouseTypeCount
+				decodeHouseType[encodedHouseTypeCount] = h.HouseType
+				encodedHouseTypeCount++
+			}
+
+			_, ok = encodedTenure[s.Tenure]
+			if !ok {
+				encodedTenure[s.Tenure] = encodedTenureCount
+				decodeTenure[encodedTenureCount] = s.Tenure
+				encodedTenureCount++
+			}
+
+			records = append(records, []string{
+				strconv.FormatInt(int64(encodedPostcode[h.Postcode.FirstPart]), 10),
+				strconv.FormatInt(int64(h.NumBedrooms), 10),
+				strconv.FormatInt(int64(encodedHouseType[h.HouseType]), 10),
+				strconv.FormatInt(int64(len(h.Sales)), 10),
+				strconv.FormatInt(int64(s.Amount), 10),
+				strconv.FormatInt(int64(s.Date.Year()), 10),
+				strconv.FormatInt(int64(encodedTenure[s.Tenure]), 10),
+			})
+		}
+	}
+
+	f, err := os.Create("encoded-house-data.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+
+	for _, record := range records {
+		if err := w.Write(record); err != nil {
+			log.Fatalln("error writing record to csv:", err)
+		}
+	}
+
+	// Write any buffered data to the underlying writer (standard output).
+	w.Flush()
+
+	if err := w.Error(); err != nil {
+		log.Fatal(err)
+	}
+
+	writeJsonFile(encodedPostcode, "encodedPostcode.json")
+	writeJsonFile(encodedHouseType, "encodedHouseType.json")
+	writeJsonFile(encodedTenure, "encodedTenure.json")
+	writeJsonFile(decodePostcode, "decodePostcode.json")
+	writeJsonFile(decodeHouseType, "decodeHouseType.json")
+	writeJsonFile(decodeTenure, "decodeTenure.json")
 }
 
 func ReadDownloadedRightMoveHtml(filename string) []house {
@@ -85,7 +245,14 @@ func ReadDownloadedRightMoveHtml(filename string) []house {
 
 									// Address
 									if a == "title clickable" {
-										h.address = s.Text()
+										addr := s.Text()
+										pc := postcodeRegex.FindString(addr)
+										spc := strings.Split(pc, " ")
+										h.Postcode = postcode{
+											FirstPart:  strings.TrimSpace(spc[0]),
+											SecondPart: strings.TrimSpace(spc[1]),
+										}
+										h.Address = addr
 									}
 									// Num bedrooms
 									if a == "subTitle bedrooms" {
@@ -97,8 +264,17 @@ func ReadDownloadedRightMoveHtml(filename string) []house {
 											panic(err)
 										}
 
-										h.numBedrooms = uint(nbn)
-										h.houseType = strings.TrimSpace(nbb[1])
+										h.NumBedrooms = uint(nbn)
+										if h.Address == "Apartment 14, Forest Court, Union Street, Chester, Cheshire West And Chester CH1 1AB" {
+											fmt.Println(s.Text())
+										}
+										h.HouseType = strings.TrimSpace(nbb[1])
+									}
+
+									if a == "subTitle " {
+										nb := s.Text()
+										h.NumBedrooms = 1
+										h.HouseType = strings.TrimSpace(nb)
 									}
 
 									if a == "transaction-table-container" {
@@ -122,7 +298,7 @@ func ReadDownloadedRightMoveHtml(filename string) []house {
 															if err != nil {
 																panic(err)
 															}
-															sp.amount = uint(pa)
+															sp.Amount = uint(pa)
 														}
 														// date-sold
 														if a == "date-sold" {
@@ -132,17 +308,17 @@ func ReadDownloadedRightMoveHtml(filename string) []house {
 															if err != nil {
 																panic(err)
 															}
-															sp.date = parseTime
+															sp.Date = parseTime
 														}
 														// Freehold or leasehold
 														if a == "table-extra tenure" {
-															sp.tenure = s.Text()
+															sp.Tenure = s.Text()
 														}
 													})
-											})
 
-										h.sales = append(h.sales, sp)
-										sp = salePrice{}
+												h.Sales = append(h.Sales, sp)
+												sp = salePrice{}
+											})
 									}
 								})
 
